@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 장애 예측기</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <style>
+        body {
+            padding: 20px;
+            background-color: #f8f9fa;
+        }
+
+        .header-container {
+            text-align: center;
+            margin-bottom: 30px;
+            background-color: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        }
+
+        .logo-img {
+            max-height: 80px;
+            margin-bottom: 15px;
+        }
+
+        .card {
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        #chart {
+            width: 100%;
+            height: 400px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <!-- 헤더 & 로고 -->
+        <div class="header-container">
+            <img src="io.png" alt="Logo" class="logo-img" onerror="this.style.display='none'">
+            <h2 class="mt-2">AI 장애 예측기</h2>
+            <p class="text-muted">AI 기반 장애 발생 예측 시스템</p>
+        </div>
+
+        <div class="card">
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-8">
+                        <div class="form-group">
+                            <label for="faultType">장애 유형 선택</label>
+                            <select id="faultType" class="form-control">
+                                <option value="">로딩 중...</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <label>&nbsp;</label>
+                        <button onclick="predict()" class="btn btn-primary btn-block">단일 예측</button>
+                    </div>
+                </div>
+                <hr>
+                <button onclick="predictAll()" class="btn btn-success btn-block">🚀 전체 장애 예측 대시보드 실행</button>
+            </div>
+        </div>
+
+        <!-- 단일 예측 결과 -->
+        <div class="card" id="resultCard" style="display:none;">
+            <div class="card-header">단일 예측 결과</div>
+            <div class="card-body">
+                <h5 id="resultTitle"></h5>
+                <p>사용 모델: <span id="usedModel" class="badge badge-info"></span></p>
+                <p>총 예측 건수: <span id="totalCount" class="font-weight-bold"></span>건</p>
+
+                <!-- 단일 예측 시간 단위 선택 버튼 -->
+                <div class="btn-group mb-3" role="group" aria-label="시간 단위 선택">
+                    <button type="button" class="btn btn-sm btn-outline-secondary active" id="single-btn-monthly"
+                        onclick="changeSingleTimeUnit('monthly')">월별</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="single-btn-quarterly"
+                        onclick="changeSingleTimeUnit('quarterly')">분기별</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="single-btn-half-yearly"
+                        onclick="changeSingleTimeUnit('half-yearly')">반기별</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="single-btn-yearly"
+                        onclick="changeSingleTimeUnit('yearly')">연도별</button>
+                </div>
+
+                <div id="chart"></div>
+                <pre id="debugInfo" class="mt-3 text-muted small"
+                    style="background:#eee; padding:10px; border-radius:5px;"></pre>
+            </div>
+        </div>
+
+        <!-- 전체 예측 대시보드 -->
+        <div class="card" id="dashboardCard" style="display:none;">
+            <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+                <span>전체 예측 대시보드</span>
+                <button onclick="downloadExcel()" class="btn btn-sm btn-light">💾 엑셀 저장 (.xlsx)</button>
+            </div>
+            <div class="card-body">
+                <!-- 종합 예측 시간 단위 선택 버튼 -->
+                <div class="btn-group mb-3" role="group" aria-label="시간 단위 선택">
+                    <button type="button" class="btn btn-outline-primary active" id="dash-btn-monthly"
+                        onclick="changeTimeUnit('monthly')">월별</button>
+                    <button type="button" class="btn btn-outline-primary" id="dash-btn-quarterly"
+                        onclick="changeTimeUnit('quarterly')">분기별</button>
+                    <button type="button" class="btn btn-outline-primary" id="dash-btn-half-yearly"
+                        onclick="changeTimeUnit('half-yearly')">반기별</button>
+                    <button type="button" class="btn btn-outline-primary" id="dash-btn-yearly"
+                        onclick="changeTimeUnit('yearly')">연도별</button>
+                </div>
+                <div id="dashboardChart" style="width: 100%; height: 600px;"></div>
+                <div class="table-responsive mt-4">
+                    <table class="table table-bordered table-sm text-center">
+                        <thead class="thead-light">
+                            <tr>
+                                <th>순위</th>
+                                <th>장애명</th>
+                                <th>총 예측</th>
+                                <th>모델</th>
+                            </tr>
+                        </thead>
+                        <tbody id="dashboardTableBody">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let chartInstance = null;
+        let dashboardChartInstance = null;
+        let allPredictionData = null;
+        let currentTimeUnit = 'monthly';
+        let singlePredictionData = null;
+        let currentSingleTimeUnit = 'monthly';
+
+        async function loadFaultTypes() {
+            try {
+                const res = await fetch('/fault_types');
+                const data = await res.json();
+                const select = document.getElementById('faultType');
+                select.innerHTML = '<option value="">선택하세요</option>';
+                data.fault_types.forEach(type => {
+                    const option = document.createElement('option');
+                    option.value = type;
+                    option.textContent = type;
+                    select.appendChild(option);
+                });
+            } catch (e) {
+                alert('장애 유형 로드 실패: ' + e);
+            }
+        }
+
+        async function predict() {
+            const faultType = document.getElementById('faultType').value;
+            if (!faultType) return alert('장애 유형을 선택하세요.');
+
+            document.getElementById('resultCard').style.display = 'none';
+            document.getElementById('dashboardCard').style.display = 'none';
+
+            try {
+                const res = await fetch('/predict', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ fault_type: faultType })
+                });
+
+                if (!res.ok) throw new Error(await res.text());
+
+                const data = await res.json();
+                singlePredictionData = data;
+                currentSingleTimeUnit = 'monthly';
+                showResult(data);
+            } catch (e) {
+                alert('예측 실패: ' + e);
+            }
+        }
+
+        async function predictAll() {
+            document.getElementById('resultCard').style.display = 'none';
+            document.getElementById('dashboardCard').style.display = 'none';
+
+            const btn = document.querySelector('button[onclick="predictAll()"]');
+            const originalText = btn.textContent;
+            btn.textContent = "⏳ 분석 중... (시간이 걸릴 수 있습니다)";
+            btn.disabled = true;
+
+            try {
+                const res = await fetch('/predict_all', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ fault_type: "ALL" })
+                });
+
+                if (!res.ok) throw new Error(await res.text());
+
+                const data = await res.json();
+                allPredictionData = data;
+                currentTimeUnit = 'monthly';
+                showDashboard(data);
+            } catch (e) {
+                alert('전체 예측 실패: ' + e);
+            } finally {
+                btn.textContent = originalText;
+                btn.disabled = false;
+            }
+        }
+
+        async function downloadExcel() {
+            if (!allPredictionData) return alert("먼저 전체 예측을 실행해주세요.");
+
+            try {
+                const res = await fetch('/download_xlsx', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(allPredictionData)
+                });
+
+                if (!res.ok) throw new Error("엑셀 생성 실패");
+
+                const blob = await res.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `prediction_report_${new Date().toISOString().slice(0, 10)}.xlsx`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+            } catch (e) {
+                alert('다운로드 실패: ' + e);
+            }
+        }
+
+        function changeSingleTimeUnit(unit) {
+            if (!singlePredictionData) return;
+
+            currentSingleTimeUnit = unit;
+
+            // 버튼 활성화 상태 변경
+            document.querySelectorAll('#resultCard .btn-group button').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            document.getElementById(`single-btn-${unit}`).classList.add('active');
+
+            // 차트 재렌더링
+            renderSingleChart(singlePredictionData, unit);
+        }
+
+        function changeTimeUnit(unit) {
+            if (!allPredictionData) return;
+
+            currentTimeUnit = unit;
+
+            // 버튼 활성화 상태 변경
+            document.querySelectorAll('#dashboardCard .btn-group button').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            document.getElementById(`dash-btn-${unit}`).classList.add('active');
+
+            // 차트 재렌더링
+            renderDashboardChart(allPredictionData, unit);
+        }
+
+        function aggregateByTimeUnit(predictions, unit) {
+            if (unit === 'monthly') {
+                return predictions.map(p => ({ period: p.month, count: p.predicted_count }));
+            }
+
+            const months = predictions.map(p => p.predicted_count);
+
+            if (unit === 'quarterly') {
+                return [
+                    { period: 'Q1', count: months[0] + months[1] + months[2] },
+                    { period: 'Q2', count: months[3] + months[4] + months[5] },
+                    { period: 'Q3', count: months[6] + months[7] + months[8] },
+                    { period: 'Q4', count: months[9] + months[10] + months[11] }
+                ];
+            }
+
+            if (unit === 'half-yearly') {
+                return [
+                    { period: '상반기', count: months.slice(0, 6).reduce((a, b) => a + b, 0) },
+                    { period: '하반기', count: months.slice(6, 12).reduce((a, b) => a + b, 0) }
+                ];
+            }
+
+            if (unit === 'yearly') {
+                return [
+                    { period: '연간', count: months.reduce((a, b) => a + b, 0) }
+                ];
+            }
+        }
+
+        function renderSingleChart(data, timeUnit) {
+            if (chartInstance) chartInstance.dispose();
+            chartInstance = echarts.init(document.getElementById('chart'));
+
+            const aggregated = aggregateByTimeUnit(data.predictions, timeUnit);
+            const periods = aggregated.map(d => d.period);
+            const counts = aggregated.map(d => d.count);
+
+            const unitNames = {
+                monthly: '월별',
+                quarterly: '분기별',
+                'half-yearly': '반기별',
+                yearly: '연도별'
+            };
+
+            const option = {
+                title: { text: `${data.fault_type} 예측 (${unitNames[timeUnit]})` },
+                tooltip: { trigger: 'axis' },
+                xAxis: { type: 'category', data: periods },
+                yAxis: { type: 'value' },
+                series: [{
+                    data: counts,
+                    type: 'bar',
+                    itemStyle: { color: '#007bff' },
+                    label: { show: true, position: 'top' }
+                }]
+            };
+            chartInstance.setOption(option);
+        }
+
+        function renderDashboardChart(data, timeUnit) {
+            const validData = data.filter(item => item.total_predicted > 0);
+
+            if (validData.length === 0) {
+                dashboardChartInstance.setOption({
+                    title: { text: '예측된 장애가 없습니다.' }
+                });
+                return;
+            }
+
+            // 각 장애별로 시간 단위에 맞게 집계
+            const aggregatedData = validData.map(item => ({
+                fault_type: item.fault_type,
+                data: aggregateByTimeUnit(item.predictions, timeUnit)
+            }));
+
+            const periods = aggregatedData[0].data.map(d => d.period);
+
+            const series = aggregatedData.map(item => ({
+                name: item.fault_type,
+                type: 'bar',
+                stack: 'total',
+                emphasis: { focus: 'series' },
+                data: item.data.map(d => d.count)
+            }));
+
+            const unitNames = {
+                monthly: '월별',
+                quarterly: '분기별',
+                'half-yearly': '반기별',
+                yearly: '연도별'
+            };
+
+            const option = {
+                title: { text: `전체 장애 예측 분포 (${unitNames[timeUnit]} 누적)` },
+                tooltip: {
+                    trigger: 'axis',
+                    axisPointer: { type: 'shadow' },
+                    formatter: function (params) {
+                        let res = params[0].name + '<br/>';
+                        let hasValue = false;
+                        params.forEach(item => {
+                            if (item.value > 0) {
+                                res += item.marker + item.seriesName + ': ' + item.value + '<br/>';
+                                hasValue = true;
+                            }
+                        });
+                        return hasValue ? res : '';
+                    }
+                },
+                legend: {
+                    type: 'scroll',
+                    top: 40,
+                    data: validData.map(item => item.fault_type)
+                },
+                grid: {
+                    left: '3%',
+                    right: '4%',
+                    bottom: '3%',
+                    containLabel: true
+                },
+                xAxis: {
+                    type: 'category',
+                    data: periods
+                },
+                yAxis: {
+                    type: 'value'
+                },
+                series: series
+            };
+
+            dashboardChartInstance.setOption(option, true);
+        }
+
+        function showResult(data) {
+            document.getElementById('resultCard').style.display = 'block';
+            document.getElementById('resultTitle').textContent = `${data.fault_type} 예측 결과`;
+            document.getElementById('usedModel').textContent = data.used_model;
+            document.getElementById('totalCount').textContent = data.total_predicted;
+            document.getElementById('debugInfo').textContent = data.debug_info;
+
+            // 버튼 초기화
+            document.querySelectorAll('#resultCard .btn-group button').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            document.getElementById('single-btn-monthly').classList.add('active');
+
+            renderSingleChart(data, currentSingleTimeUnit);
+        }
+
+        function showDashboard(data) {
+            document.getElementById('dashboardCard').style.display = 'block';
+
+            // 테이블 채우기
+            const tbody = document.getElementById('dashboardTableBody');
+            tbody.innerHTML = '';
+            data.forEach((item, index) => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${index + 1}</td>
+                    <td>${item.fault_type}</td>
+                    <td>${item.total_predicted}</td>
+                    <td>${item.used_model}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+            // 버튼 초기화
+            document.querySelectorAll('#dashboardCard .btn-group button').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            document.getElementById('dash-btn-monthly').classList.add('active');
+
+            // 차트 초기화 및 렌더링
+            if (dashboardChartInstance) dashboardChartInstance.dispose();
+            dashboardChartInstance = echarts.init(document.getElementById('dashboardChart'));
+
+            renderDashboardChart(data, currentTimeUnit);
+        }
+
+        window.onload = loadFaultTypes;
+    </script>
+
+</body>
+
+</html>
